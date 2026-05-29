@@ -112,6 +112,19 @@ function validateRegisterBody(body) {
   return { ok: true, deviceId, userName };
 }
 
+function validateNickname(value) {
+  const nickname = normalizeString(value);
+
+  if (!nickname) {
+    return { ok: false, message: 'nickname is required' };
+  }
+  if (nickname.length < 2 || nickname.length > 32) {
+    return { ok: false, message: 'nickname must be 2..32 characters' };
+  }
+
+  return { ok: true, nickname };
+}
+
 function validateScoreBody(body) {
   const deviceId = normalizeString(body?.device_id);
   const rawLapSeconds = body?.lap_seconds;
@@ -178,6 +191,10 @@ app.get('/api/health', (req, res) => {
     service: 'leaderboard-api',
     ts: new Date().toISOString(),
   });
+});
+
+app.get('/admin', (req, res) => {
+  res.sendFile(path.join(__dirname, 'admin.html'));
 });
 
 // 유저 등록/업데이트 (UPSERT)
@@ -290,6 +307,73 @@ app.get('/api/leaderboard', async (req, res) => {
     return res.json(result);
   } catch (err) {
     console.error('[GET /leaderboard] error:', err);
+    return jsonError(res, 500, 'internal server error');
+  }
+});
+
+app.get('/api/admin/users', async (req, res) => {
+  try {
+    const query = normalizeString(req.query.query);
+    const limitRaw = Number(req.query.limit || 100);
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(Math.floor(limitRaw), 200) : 100;
+    const likeQuery = query ? `%${query}%` : null;
+
+    const rows = await dbAll(
+      `
+      SELECT id, device_id, user_name, created_at, updated_at
+      FROM users
+      WHERE (? IS NULL OR user_name LIKE ? OR device_id LIKE ? OR CAST(id AS TEXT) LIKE ?)
+      ORDER BY updated_at DESC, id DESC
+      LIMIT ?
+      `,
+      [likeQuery, likeQuery, likeQuery, likeQuery, limit]
+    );
+
+    return res.json({
+      status: 'ok',
+      count: rows.length,
+      users: rows,
+    });
+  } catch (err) {
+    console.error('[GET /api/admin/users] error:', err);
+    return jsonError(res, 500, 'internal server error');
+  }
+});
+
+app.put('/api/admin/users/:id', async (req, res) => {
+  try {
+    const userId = Number(req.params.id);
+    if (!Number.isInteger(userId) || userId <= 0) {
+      return jsonError(res, 400, 'invalid user id');
+    }
+
+    const v = validateNickname(req.body?.nickname ?? req.body?.user_name);
+    if (!v.ok) return jsonError(res, 400, v.message);
+
+    const updated = await dbRun(
+      `
+      UPDATE users
+      SET user_name = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+      `,
+      [v.nickname, userId]
+    );
+
+    if (!updated.changes) {
+      return jsonError(res, 404, 'user not found');
+    }
+
+    const user = await dbGet(
+      `SELECT id, device_id, user_name, created_at, updated_at FROM users WHERE id = ?`,
+      [userId]
+    );
+
+    return res.json({
+      status: 'ok',
+      user,
+    });
+  } catch (err) {
+    console.error('[PUT /api/admin/users/:id] error:', err);
     return jsonError(res, 500, 'internal server error');
   }
 });
