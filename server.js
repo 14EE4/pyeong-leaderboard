@@ -194,6 +194,10 @@ app.get('/api/health', (req, res) => {
 });
 
 app.get('/admin', (req, res) => {
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'self'; base-uri 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self';"
+  );
   res.sendFile(path.join(__dirname, 'admin.html'));
 });
 
