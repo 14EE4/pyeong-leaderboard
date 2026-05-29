@@ -19,6 +19,7 @@ const path = require('path');
 
 const PORT = Number(process.env.PORT || 3001);
 const DATABASE_FILE = process.env.DATABASE_FILE || path.join(__dirname, 'leaderboard.db');
+const ADMIN_PASSWORD_FILE = process.env.ADMIN_PASSWORD_FILE || path.join(__dirname, '.admin-password');
 const MAX_LAP_SECONDS = Number(process.env.MAX_LAP_SECONDS || 200000); // 약 55시간 33분
 const DEFAULT_LIMIT = Number(process.env.DEFAULT_LIMIT || 10);
 
@@ -93,6 +94,55 @@ function jsonError(res, status, message) {
 
 function normalizeString(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function readAdminPassword() {
+  try {
+    if (!fs.existsSync(ADMIN_PASSWORD_FILE)) {
+      console.warn(`[AUTH] admin password file not found: ${ADMIN_PASSWORD_FILE}`);
+      return null;
+    }
+
+    const password = fs.readFileSync(ADMIN_PASSWORD_FILE, 'utf8').trim();
+    if (!password) {
+      console.warn(`[AUTH] admin password file is empty: ${ADMIN_PASSWORD_FILE}`);
+      return null;
+    }
+
+    return password;
+  } catch (err) {
+    console.error('[AUTH] failed to read admin password file:', err.message);
+    return null;
+  }
+}
+
+function extractBasicAuthPassword(req) {
+  const header = normalizeString(req.headers.authorization);
+  if (!header.startsWith('Basic ')) return '';
+
+  try {
+    const decoded = Buffer.from(header.slice(6), 'base64').toString('utf8');
+    const separatorIndex = decoded.indexOf(':');
+    if (separatorIndex === -1) return '';
+    return decoded.slice(separatorIndex + 1);
+  } catch {
+    return '';
+  }
+}
+
+function requireAdminPassword(req, res, next) {
+  const adminPassword = readAdminPassword();
+  if (!adminPassword) {
+    return jsonError(res, 503, 'admin password is not configured');
+  }
+
+  const requestPassword = extractBasicAuthPassword(req);
+  if (!requestPassword || requestPassword !== adminPassword) {
+    res.setHeader('WWW-Authenticate', 'Basic realm="pyeong leaderboard admin"');
+    return jsonError(res, 401, 'admin authentication required');
+  }
+
+  return next();
 }
 
 function validateRegisterBody(body) {
@@ -194,6 +244,17 @@ app.get('/api/health', (req, res) => {
 });
 
 app.get('/admin', (req, res) => {
+  const adminPassword = readAdminPassword();
+  if (!adminPassword) {
+    return jsonError(res, 503, 'admin password is not configured');
+  }
+
+  const requestPassword = extractBasicAuthPassword(req);
+  if (!requestPassword || requestPassword !== adminPassword) {
+    res.setHeader('WWW-Authenticate', 'Basic realm="pyeong leaderboard admin"');
+    return jsonError(res, 401, 'admin authentication required');
+  }
+
   res.setHeader(
     'Content-Security-Policy',
     "default-src 'self'; base-uri 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self';"
@@ -315,7 +376,7 @@ app.get('/api/leaderboard', async (req, res) => {
   }
 });
 
-app.get('/api/admin/users', async (req, res) => {
+app.get('/api/admin/users', requireAdminPassword, async (req, res) => {
   try {
     const query = normalizeString(req.query.query);
     const limitRaw = Number(req.query.limit || 100);
@@ -344,7 +405,7 @@ app.get('/api/admin/users', async (req, res) => {
   }
 });
 
-app.put('/api/admin/users/:id', async (req, res) => {
+app.put('/api/admin/users/:id', requireAdminPassword, async (req, res) => {
   try {
     const userId = Number(req.params.id);
     if (!Number.isInteger(userId) || userId <= 0) {
