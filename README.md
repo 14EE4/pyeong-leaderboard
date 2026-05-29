@@ -9,6 +9,8 @@ npm install
 npm start
 ```
 
+PM2로 운영 중이면 재시작은 `pm2 restart 3` 를 사용합니다.
+
 기본 포트는 `3001`입니다. 환경 변수로 바꿀 수 있습니다.
 
 - `PORT`: 서버 포트
